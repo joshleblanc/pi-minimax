@@ -36,15 +36,7 @@ export MINIMAX_API_HOST="https://api.minimax.cn"
 
 ### 3. Add to pi Settings
 
-Add the extension path to your `~/.pi/agent/settings.json`:
-
-```json
-{
-  "packages": [
-    "...existing packages...",
-    ".../path/to/pi-ext/minimax"
-  ]
-}
+pi install https://github.com/joshleblanc/pi-minimax
 ```
 
 ## Usage
