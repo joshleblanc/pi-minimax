@@ -6,6 +6,7 @@
  * - understand_image: Analyze images using AI
  * - generate_image: Generate images from text prompts using AI
  * - transform_image: Transform existing images using AI (image-to-image)
+ * - generate_music: Generate music using AI
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
@@ -68,6 +69,23 @@ interface ImageGenerationResponse {
   base_resp: {
     status_code: number;
     status_msg: string;
+  };
+}
+
+interface MusicGenerationResponse {
+  data: {
+    status: number;
+    audio?: string;
+  };
+  base_resp: {
+    status_code: number;
+    status_msg: string;
+  };
+  extra_info?: {
+    duration?: number;
+    sample_rate?: number;
+    bitrate?: number;
+    size?: number;
   };
 }
 
@@ -704,6 +722,230 @@ export default function (pi: ExtensionAPI) {
         const errorMessage = error instanceof Error ? error.message : "Unknown error";
         return {
           content: [{ type: "text", text: `❌ **Image Transformation Error:**\n\n${errorMessage}` }],
+          details: { error: errorMessage, prompt: params.prompt },
+          isError: true,
+        };
+      }
+    },
+  });
+
+  // Register generate_music tool
+  pi.registerTool({
+    name: "generate_music",
+    label: "Generate Music",
+    description: `Generate music using MiniMax AI.
+
+    Creates original music tracks based on text descriptions of style, mood, and scenario.
+    Can optionally include lyrics with structure tags like [Verse], [Chorus], [Bridge].
+
+    Note: Audio URLs expire after 24 hours - download promptly.`,
+    parameters: Type.Object({
+      prompt: Type.Optional(
+        Type.String({
+          description: "Music description including style, mood, and scenario (1-2000 characters). Required if no lyrics provided.",
+          examples: [
+            "Indie folk, melancholic, introspective",
+            "Upbeat electronic dance music with driving beats",
+            "Peaceful ambient piano with soft strings",
+          ],
+        })
+      ),
+      lyrics: Type.Optional(
+        Type.String({
+          description: "Song lyrics with structure tags like [Verse], [Chorus], [Bridge] (1-3500 characters). Required if no prompt provided.",
+          examples: [
+            "[Verse 1]\nStreetlights flicker in the rain\n[Verse 2]\nMemories fade like yesterday",
+          ],
+        })
+      ),
+      model: Type.Optional(
+        Type.String({
+          description: "Model to use for music generation",
+          default: "music-2.5+",
+        })
+      ),
+      is_instrumental: Type.Optional(
+        Type.Boolean({
+          description: "Generate instrumental only (without vocals). Only works with music-2.5+ model.",
+          default: false,
+        })
+      ),
+      output_format: Type.Optional(
+        Type.String({
+          description: "Output format for the generated audio",
+          enum: ["url", "hex"],
+          default: "url",
+        })
+      ),
+      sample_rate: Type.Optional(
+        Type.Number({
+          description: "Audio sample rate in Hz",
+          enum: [16000, 24000, 32000, 44100],
+        })
+      ),
+      bitrate: Type.Optional(
+        Type.Number({
+          description: "Audio bitrate in bps",
+          enum: [32000, 64000, 128000, 256000],
+        })
+      ),
+      audio_format: Type.Optional(
+        Type.String({
+          description: "Audio format",
+          enum: ["mp3", "wav", "pcm"],
+          default: "mp3",
+        })
+      ),
+      lyrics_optimizer: Type.Optional(
+        Type.Boolean({
+          description: "Automatically generate lyrics from the prompt",
+          default: true,
+        })
+      ),
+    }),
+
+    async execute(_toolCallId, params, _signal, onUpdate, _ctx) {
+      const config = validateConfig();
+      const url = `${config.apiHost}/v1/music_generation`;
+
+      onUpdate?.({
+        content: [{ type: "text", text: `Generating music...` }],
+        details: { status: "generating", prompt: params.prompt },
+      });
+
+      try {
+        const requestBody: Record<string, unknown> = {
+          model: params.model || "music-2.5+",
+          output_format: params.output_format || "url",
+        };
+
+        // Add prompt if provided
+        if (params.prompt) {
+          requestBody.prompt = params.prompt;
+        }
+
+        // Add lyrics if provided
+        if (params.lyrics) {
+          requestBody.lyrics = params.lyrics;
+        }
+
+        // Add instrumental flag if true (only for music-2.5+)
+        if (params.is_instrumental === true) {
+          requestBody.is_instrumental = true;
+        }
+
+        // Add lyrics optimizer if true
+        if (params.lyrics_optimizer === true) {
+          requestBody.lyrics_optimizer = true;
+        }
+
+        // Add audio settings if any are provided
+        if (params.sample_rate || params.bitrate || params.audio_format) {
+          requestBody.audio_setting = {};
+          if (params.sample_rate) requestBody.audio_setting.sample_rate = params.sample_rate;
+          if (params.bitrate) requestBody.audio_setting.bitrate = params.bitrate;
+          if (params.audio_format) requestBody.audio_setting.format = params.audio_format;
+        }
+
+        const response = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${config.apiKey}`,
+            "Content-Type": "application/json",
+            "MM-API-Source": "Minimax-MCP",
+          },
+          body: JSON.stringify(requestBody),
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`MiniMax API error (${response.status}): ${errorText}`);
+        }
+
+        const result: MusicGenerationResponse = await response.json();
+
+        // Check for API error
+        if (result.base_resp.status_code !== 0) {
+          throw new Error(`MiniMax API error (${result.base_resp.status_code}): ${result.base_resp.status_msg}`);
+        }
+
+        // Check if generation is still in progress (status 1 = in progress, 2 = completed)
+        if (result.data.status === 1) {
+          return {
+            content: [{ type: "text", text: `⏳ **Music Generation In Progress**
+
+Your music is being generated. Please try again in a moment to retrieve the completed track.
+
+**Prompt:** ${params.prompt || "N/A"}
+**Status:** Processing...` }],
+            details: {
+              status: "in_progress",
+              prompt: params.prompt,
+              model: params.model || "music-2.5+",
+            },
+          };
+        }
+
+        // Format output
+        let output = `## Generated Music\n\n`;
+
+        if (params.prompt) {
+          output += `**Prompt:** ${params.prompt}\n\n`;
+        }
+
+        if (params.lyrics) {
+          output += `**Lyrics:**\n${params.lyrics}\n\n`;
+        }
+
+        output += `**Model:** ${params.model || "music-2.5+"}\n\n`;
+
+        if (result.extra_info) {
+          const duration = result.extra_info.duration
+            ? `${(result.extra_info.duration / 1000).toFixed(1)}s`
+            : "N/A";
+          const bitrate = result.extra_info.bitrate
+            ? `${(result.extra_info.bitrate / 1000)}kbps`
+            : "N/A";
+          const sampleRate = result.extra_info.sample_rate
+            ? `${result.extra_info.sample_rate}Hz`
+            : "N/A";
+          const size = result.extra_info.size
+            ? `${(result.extra_info.size / 1024).toFixed(1)}KB`
+            : "N/A";
+
+          output += `**Duration:** ${duration} | **Bitrate:** ${bitrate} | **Sample Rate:** ${sampleRate} | **Size:** ${size}\n\n`;
+        }
+
+        if (params.output_format === "hex" && result.data.audio) {
+          output += `**Format:** Hex-encoded audio\n\n`;
+          output += `Audio data (truncated): ${result.data.audio.substring(0, 50)}...\n`;
+        } else if (result.data.audio) {
+          // URL format - normalize and display the audio URL
+          const audioUrl = normalizeUrl(result.data.audio);
+          output += `**Audio URL:** ${audioUrl}\n\n`;
+          output += `**Download:** ${audioUrl}\n`;
+        }
+
+        output += `\n**Note:** Audio URLs expire after 24 hours - download promptly if needed.`;
+
+        return {
+          content: [{ type: "text", text: output }],
+          details: {
+            prompt: params.prompt,
+            lyrics: params.lyrics,
+            model: params.model || "music-2.5+",
+            isInstrumental: params.is_instrumental || false,
+            audioUrl: params.output_format !== "hex" ? normalizeUrl(result.data.audio) : undefined,
+            duration: result.extra_info?.duration,
+            sampleRate: result.extra_info?.sample_rate,
+            bitrate: result.extra_info?.bitrate,
+            size: result.extra_info?.size,
+          },
+        };
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : "Unknown error";
+        return {
+          content: [{ type: "text", text: `❌ **Music Generation Error:**\n\n${errorMessage}` }],
           details: { error: errorMessage, prompt: params.prompt },
           isError: true,
         };
