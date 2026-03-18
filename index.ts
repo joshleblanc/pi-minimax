@@ -8,6 +8,12 @@
  * - transform_image: Transform existing images using AI (image-to-image)
  * - generate_music: Generate music using AI
  * - generate_lyrics: Generate song lyrics using AI
+ * - generate_video: Generate videos from text prompts using AI
+ * - generate_video_from_image: Generate videos from images using AI
+ * - generate_video_with_frames: Generate videos from first/last frame images
+ * - generate_video_with_subject: Generate videos with subject reference
+ * - query_video: Query video generation status
+ * - download_video: Get video download URL
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
@@ -94,6 +100,41 @@ interface LyricsGenerationResponse {
   song_title?: string;
   style_tags?: string;
   lyrics?: string;
+  base_resp: {
+    status_code: number;
+    status_msg: string;
+  };
+}
+
+interface VideoGenerationResponse {
+  task_id?: string;
+  base_resp: {
+    status_code: number;
+    status_msg: string;
+  };
+}
+
+interface VideoQueryResponse {
+  task_id?: string;
+  status?: "Preparing" | "Queueing" | "Processing" | "Success" | "Fail";
+  file_id?: string;
+  video_width?: number;
+  video_height?: number;
+  base_resp: {
+    status_code: number;
+    status_msg: string;
+  };
+}
+
+interface VideoDownloadResponse {
+  file?: {
+    file_id?: number;
+    bytes?: number;
+    created_at?: number;
+    filename?: string;
+    purpose?: string;
+    download_url?: string;
+  };
   base_resp: {
     status_code: number;
     status_msg: string;
@@ -1095,6 +1136,804 @@ Your music is being generated. Please try again in a moment to retrieve the comp
         return {
           content: [{ type: "text", text: `❌ **Lyrics Generation Error:**\n\n${errorMessage}` }],
           details: { error: errorMessage, mode: params.mode },
+          isError: true,
+        };
+      }
+    },
+  });
+
+  // Register generate_video tool
+  pi.registerTool({
+    name: "generate_video",
+    label: "Generate Video",
+    description: `Generate videos from text prompts using MiniMax AI.
+
+    Creates videos based on text descriptions with support for camera commands using [command] syntax.
+    Video generation is asynchronous - a task_id is returned for tracking.
+
+    Supported camera commands: [Pedestal up], [Pedestal down], [Static shot], [Pan left], [Pan right], [Tilt up], [Tilt down], [Dolly], [Tracking], and more.`,
+    parameters: Type.Object({
+      prompt: Type.String({
+        description: "Text description of the video to generate (max 2000 characters). Supports camera commands like [Pedestal up], [Static shot]",
+        examples: [
+          "A man picks up a book [Pedestal up], then reads [Static shot].",
+          "Ocean waves crashing on a beach at sunset [Pan left]",
+          "A cat playing with a ball of yarn in a living room [Tracking]",
+        ],
+      }),
+      model: Type.Optional(
+        Type.String({
+          description: "Model to use for video generation",
+          default: "MiniMax-Hailuo-2.3",
+        })
+      ),
+      prompt_optimizer: Type.Optional(
+        Type.Boolean({
+          description: "Automatically optimize the prompt for better results",
+          default: true,
+        })
+      ),
+      fast_pretreatment: Type.Optional(
+        Type.Boolean({
+          description: "Reduces optimization time for specific models",
+          default: false,
+        })
+      ),
+      duration: Type.Optional(
+        Type.Number({
+          description: "Video duration in seconds",
+          default: 6,
+        })
+      ),
+      resolution: Type.Optional(
+        Type.String({
+          description: "Video resolution",
+          enum: ["720P", "768P", "1080P"],
+        })
+      ),
+      callback_url: Type.Optional(
+        Type.String({
+          description: "Webhook URL for async status updates when video is ready",
+        })
+      ),
+    }),
+
+    async execute(_toolCallId, params, _signal, onUpdate, _ctx) {
+      const config = validateConfig();
+      const url = `${config.apiHost}/v1/video_generation`;
+
+      onUpdate?.({
+        content: [{ type: "text", text: `Generating video...` }],
+        details: { status: "generating", prompt: params.prompt },
+      });
+
+      try {
+        const requestBody: Record<string, unknown> = {
+          model: params.model || "MiniMax-Hailuo-2.3",
+          prompt: params.prompt,
+          prompt_optimizer: params.prompt_optimizer !== false,
+        };
+
+        // Add optional parameters
+        if (params.fast_pretreatment) {
+          requestBody.fast_pretreatment = true;
+        }
+
+        if (params.duration) {
+          requestBody.duration = params.duration;
+        }
+
+        if (params.resolution) {
+          requestBody.resolution = params.resolution;
+        }
+
+        if (params.callback_url) {
+          requestBody.callback_url = params.callback_url;
+        }
+
+        const response = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${config.apiKey}`,
+            "Content-Type": "application/json",
+            "MM-API-Source": "Minimax-MCP",
+          },
+          body: JSON.stringify(requestBody),
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`MiniMax API error (${response.status}): ${errorText}`);
+        }
+
+        const result: VideoGenerationResponse = await response.json();
+
+        // Check for API error
+        if (result.base_resp.status_code !== 0) {
+          throw new Error(`MiniMax API error (${result.base_resp.status_code}): ${result.base_resp.status_msg}`);
+        }
+
+        // Format output
+        let output = `## Generated Video\n\n`;
+        output += `**Prompt:** ${params.prompt}\n\n`;
+        output += `**Model:** ${params.model || "MiniMax-Hailuo-2.3"}\n\n`;
+
+        if (params.duration) {
+          output += `**Duration:** ${params.duration}s\n`;
+        }
+
+        if (params.resolution) {
+          output += `**Resolution:** ${params.resolution}\n`;
+        }
+
+        output += `\n**Task ID:** ${result.task_id}\n\n`;
+        output += `Video generation is in progress. Use the task_id to check status or wait for callback if callback_url was provided.`;
+
+        return {
+          content: [{ type: "text", text: output }],
+          details: {
+            prompt: params.prompt,
+            model: params.model || "MiniMax-Hailuo-2.3",
+            taskId: result.task_id,
+            duration: params.duration,
+            resolution: params.resolution,
+          },
+        };
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : "Unknown error";
+        return {
+          content: [{ type: "text", text: `❌ **Video Generation Error:**\n\n${errorMessage}` }],
+          details: { error: errorMessage, prompt: params.prompt },
+          isError: true,
+        };
+      }
+    },
+  });
+
+  // Register generate_video_from_image tool (image-to-video)
+  pi.registerTool({
+    name: "generate_video_from_image",
+    label: "Generate Video from Image",
+    description: `Generate a video from an image using MiniMax AI (image-to-video).
+
+    Takes a source image and generates a video based on the text prompt and camera commands.
+    Supports local file paths (will be encoded to base64), public URLs, and data URLs.
+
+    Video generation is asynchronous - a task_id is returned for tracking.
+
+    Supported camera commands: [Pan left], [Pan right], [Zoom in], [Zoom out], [Tilt up], [Tilt down], [Pedestal up], [Pedestal down], [Static shot], and more.`,
+    parameters: Type.Object({
+      image: Type.String({
+        description: "Source image: URL, local path, or base64 data URL (JPG, PNG, WebP; short edge >300px)",
+        examples: [
+          "https://example.com/photo.jpg",
+          "./portrait.png",
+          "/home/user/image.png",
+        ],
+      }),
+      prompt: Type.Optional(
+        Type.String({
+          description: "Video description (max 2000 characters). Supports camera commands like [Pan left], [Zoom in]",
+          examples: [
+            "A mouse runs toward the camera, smiling and blinking [Pan left]",
+            "The flower slowly opens up [Zoom in]",
+            "Clouds drifting across the sky [Pan right]",
+          ],
+        })
+      ),
+      model: Type.Optional(
+        Type.String({
+          description: "Model to use for video generation",
+          default: "MiniMax-Hailuo-2.3",
+        })
+      ),
+      prompt_optimizer: Type.Optional(
+        Type.Boolean({
+          description: "Automatically optimize the prompt for better results",
+          default: true,
+        })
+      ),
+      fast_pretreatment: Type.Optional(
+        Type.Boolean({
+          description: "Reduces optimization time (2.3/2.3-Fast/02 models only)",
+          default: false,
+        })
+      ),
+      duration: Type.Optional(
+        Type.Number({
+          description: "Video duration in seconds (6 or 10 depending on model/resolution)",
+          default: 6,
+        })
+      ),
+      resolution: Type.Optional(
+        Type.String({
+          description: "Video resolution",
+          enum: ["512P", "720P", "768P", "1080P"],
+        })
+      ),
+      callback_url: Type.Optional(
+        Type.String({
+          description: "Webhook URL for async status updates when video is ready",
+        })
+      ),
+    }),
+
+    async execute(_toolCallId, params, _signal, onUpdate, _ctx) {
+      const config = validateConfig();
+      const url = `${config.apiHost}/v1/video_generation`;
+
+      onUpdate?.({
+        content: [{ type: "text", text: `Generating video from image...` }],
+        details: { status: "generating", image: params.image },
+      });
+
+      try {
+        // Process image: convert local paths to base64, pass through URLs and data URLs
+        const processedImage = await processImageUrl(params.image);
+
+        const requestBody: Record<string, unknown> = {
+          model: params.model || "MiniMax-Hailuo-2.3",
+          first_frame_image: processedImage,
+          prompt_optimizer: params.prompt_optimizer !== false,
+        };
+
+        // Add prompt if provided
+        if (params.prompt) {
+          requestBody.prompt = params.prompt;
+        }
+
+        // Add optional parameters
+        if (params.fast_pretreatment) {
+          requestBody.fast_pretreatment = true;
+        }
+
+        if (params.duration) {
+          requestBody.duration = params.duration;
+        }
+
+        if (params.resolution) {
+          requestBody.resolution = params.resolution;
+        }
+
+        if (params.callback_url) {
+          requestBody.callback_url = params.callback_url;
+        }
+
+        const response = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${config.apiKey}`,
+            "Content-Type": "application/json",
+            "MM-API-Source": "Minimax-MCP",
+          },
+          body: JSON.stringify(requestBody),
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`MiniMax API error (${response.status}): ${errorText}`);
+        }
+
+        const result: VideoGenerationResponse = await response.json();
+
+        // Check for API error
+        if (result.base_resp.status_code !== 0) {
+          throw new Error(`MiniMax API error (${result.base_resp.status_code}): ${result.base_resp.status_msg}`);
+        }
+
+        // Format output
+        let output = `## Generated Video from Image\n\n`;
+        output += `**Model:** ${params.model || "MiniMax-Hailuo-2.3"}\n\n`;
+
+        if (params.prompt) {
+          output += `**Prompt:** ${params.prompt}\n`;
+        }
+
+        if (params.duration) {
+          output += `**Duration:** ${params.duration}s\n`;
+        }
+
+        if (params.resolution) {
+          output += `**Resolution:** ${params.resolution}\n`;
+        }
+
+        output += `\n**Task ID:** ${result.task_id}\n\n`;
+        output += `Video generation is in progress. Use the task_id to check status or wait for callback if callback_url was provided.`;
+
+        return {
+          content: [{ type: "text", text: output }],
+          details: {
+            prompt: params.prompt,
+            model: params.model || "MiniMax-Hailuo-2.3",
+            taskId: result.task_id,
+            duration: params.duration,
+            resolution: params.resolution,
+          },
+        };
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : "Unknown error";
+        return {
+          content: [{ type: "text", text: `❌ **Video Generation Error:**\n\n${errorMessage}` }],
+          details: { error: errorMessage, image: params.image },
+          isError: true,
+        };
+      }
+    },
+  });
+
+  // Register generate_video_with_frames tool (first/last frame video)
+  pi.registerTool({
+    name: "generate_video_with_frames",
+    label: "Generate Video with Frames",
+    description: `Generate a video from first and last frame images using MiniMax AI (first-last frame video).
+
+    Creates a video transition from a starting frame to an ending frame with optional text prompt.
+    Supports local file paths (will be encoded to base64), public URLs, and data URLs.
+
+    Video generation is asynchronous - a task_id is returned for tracking.
+
+    Supported camera commands: [Pan left], [Pan right], [Push in], [Pull out], [Pedestal up], [Pedestal down], [Tilt up], [Tilt down], [Zoom in], [Zoom out], [Shake], [Tracking shot], [Static shot].`,
+    parameters: Type.Object({
+      last_frame_image: Type.String({
+        description: "Ending frame image: URL, local path, or base64 data URL (JPG, PNG, WebP; short edge >300px)",
+        examples: [
+          "https://example.com/end_frame.jpg",
+          "./end_portrait.png",
+          "/home/user/end_image.png",
+        ],
+      }),
+      first_frame_image: Type.Optional(
+        Type.String({
+          description: "Starting frame image: URL, local path, or base64 data URL (JPG, PNG, WebP; short edge >300px). If not provided, video starts from last frame.",
+          examples: [
+            "https://example.com/start_frame.jpg",
+            "./start_portrait.png",
+            "/home/user/start_image.png",
+          ],
+        })
+      ),
+      prompt: Type.Optional(
+        Type.String({
+          description: "Video description (max 2000 characters). Supports camera commands like [Pan left], [Zoom in]",
+          examples: [
+            "A little girl grow up [Pan right]",
+            "The flower slowly opens up [Zoom in]",
+            "Transformation from caterpillar to butterfly [Push in]",
+          ],
+        })
+      ),
+      model: Type.Optional(
+        Type.String({
+          description: "Model to use for video generation",
+          default: "MiniMax-Hailuo-02",
+        })
+      ),
+      prompt_optimizer: Type.Optional(
+        Type.Boolean({
+          description: "Automatically optimize the prompt for better results",
+          default: true,
+        })
+      ),
+      duration: Type.Optional(
+        Type.Number({
+          description: "Video duration in seconds (6 or 10)",
+          default: 6,
+        })
+      ),
+      resolution: Type.Optional(
+        Type.String({
+          description: "Video resolution (768P or 1080P; 10s only supports 768P)",
+          enum: ["768P", "1080P"],
+        })
+      ),
+      callback_url: Type.Optional(
+        Type.String({
+          description: "Webhook URL for async status updates when video is ready",
+        })
+      ),
+    }),
+
+    async execute(_toolCallId, params, _signal, onUpdate, _ctx) {
+      const config = validateConfig();
+      const url = `${config.apiHost}/v1/video_generation`;
+
+      onUpdate?.({
+        content: [{ type: "text", text: `Generating video from frames...` }],
+        details: { status: "generating" },
+      });
+
+      try {
+        // Process last frame image
+        const processedLastFrame = await processImageUrl(params.last_frame_image);
+
+        const requestBody: Record<string, unknown> = {
+          model: params.model || "MiniMax-Hailuo-02",
+          last_frame_image: processedLastFrame,
+          prompt_optimizer: params.prompt_optimizer !== false,
+        };
+
+        // Add first frame if provided
+        if (params.first_frame_image) {
+          const processedFirstFrame = await processImageUrl(params.first_frame_image);
+          requestBody.first_frame_image = processedFirstFrame;
+        }
+
+        // Add prompt if provided
+        if (params.prompt) {
+          requestBody.prompt = params.prompt;
+        }
+
+        // Add optional parameters
+        if (params.duration) {
+          requestBody.duration = params.duration;
+        }
+
+        if (params.resolution) {
+          requestBody.resolution = params.resolution;
+        }
+
+        if (params.callback_url) {
+          requestBody.callback_url = params.callback_url;
+        }
+
+        const response = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${config.apiKey}`,
+            "Content-Type": "application/json",
+            "MM-API-Source": "Minimax-MCP",
+          },
+          body: JSON.stringify(requestBody),
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`MiniMax API error (${response.status}): ${errorText}`);
+        }
+
+        const result: VideoGenerationResponse = await response.json();
+
+        // Check for API error
+        if (result.base_resp.status_code !== 0) {
+          throw new Error(`MiniMax API error (${result.base_resp.status_code}): ${result.base_resp.status_msg}`);
+        }
+
+        // Format output
+        let output = `## Generated Video from Frames\n\n`;
+        output += `**Model:** ${params.model || "MiniMax-Hailuo-02"}\n\n`;
+
+        if (params.prompt) {
+          output += `**Prompt:** ${params.prompt}\n`;
+        }
+
+        if (params.duration) {
+          output += `**Duration:** ${params.duration}s\n`;
+        }
+
+        if (params.resolution) {
+          output += `**Resolution:** ${params.resolution}\n`;
+        }
+
+        output += `\n**Task ID:** ${result.task_id}\n\n`;
+        output += `Video generation is in progress. Use the task_id to check status or wait for callback if callback_url was provided.`;
+
+        return {
+          content: [{ type: "text", text: output }],
+          details: {
+            prompt: params.prompt,
+            model: params.model || "MiniMax-Hailuo-02",
+            taskId: result.task_id,
+            duration: params.duration,
+            resolution: params.resolution,
+          },
+        };
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : "Unknown error";
+        return {
+          content: [{ type: "text", text: `❌ **Video Generation Error:**\n\n${errorMessage}` }],
+          details: { error: errorMessage },
+          isError: true,
+        };
+      }
+    },
+  });
+
+  // Register generate_video_with_subject tool (subject-reference video)
+  pi.registerTool({
+    name: "generate_video_with_subject",
+    label: "Generate Video with Subject",
+    description: `Generate a video with a subject reference using MiniMax AI (S2V).
+
+    Uses a character image reference to generate videos featuring that subject.
+    Supports local file paths (will be encoded to base64), public URLs, and data URLs.
+
+    Video generation is asynchronous - a task_id is returned for tracking.`,
+    parameters: Type.Object({
+      subject_image: Type.String({
+        description: "Subject reference image: URL, local path, or base64 data URL (JPG, PNG, WebP; short edge >300px)",
+        examples: [
+          "https://example.com/portrait.jpg",
+          "./portrait.png",
+          "/home/user/photo.png",
+        ],
+      }),
+      prompt: Type.Optional(
+        Type.String({
+          description: "Video description (max 2000 characters)",
+          examples: [
+            "A girl runs toward the camera and winks with a smile",
+            "The person dances happily in the rain",
+            "Someone reading a book by the window",
+          ],
+        })
+      ),
+      prompt_optimizer: Type.Optional(
+        Type.Boolean({
+          description: "Automatically optimize the prompt for better results",
+          default: true,
+        })
+      ),
+      callback_url: Type.Optional(
+        Type.String({
+          description: "Webhook URL for async status updates when video is ready",
+        })
+      ),
+    }),
+
+    async execute(_toolCallId, params, _signal, onUpdate, _ctx) {
+      const config = validateConfig();
+      const url = `${config.apiHost}/v1/video_generation`;
+
+      onUpdate?.({
+        content: [{ type: "text", text: `Generating video with subject reference...` }],
+        details: { status: "generating", subjectImage: params.subject_image },
+      });
+
+      try {
+        // Process subject image
+        const processedImage = await processImageUrl(params.subject_image);
+
+        const requestBody: Record<string, unknown> = {
+          model: "S2V-01",
+          subject_reference: [
+            {
+              type: "character",
+              image: [processedImage],
+            },
+          ],
+          prompt_optimizer: params.prompt_optimizer !== false,
+        };
+
+        // Add prompt if provided
+        if (params.prompt) {
+          requestBody.prompt = params.prompt;
+        }
+
+        // Add callback URL if provided
+        if (params.callback_url) {
+          requestBody.callback_url = params.callback_url;
+        }
+
+        const response = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${config.apiKey}`,
+            "Content-Type": "application/json",
+            "MM-API-Source": "Minimax-MCP",
+          },
+          body: JSON.stringify(requestBody),
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`MiniMax API error (${response.status}): ${errorText}`);
+        }
+
+        const result: VideoGenerationResponse = await response.json();
+
+        // Check for API error
+        if (result.base_resp.status_code !== 0) {
+          throw new Error(`MiniMax API error (${result.base_resp.status_code}): ${result.base_resp.status_msg}`);
+        }
+
+        // Format output
+        let output = `## Generated Video with Subject\n\n`;
+        output += `**Model:** S2V-01\n\n`;
+
+        if (params.prompt) {
+          output += `**Prompt:** ${params.prompt}\n`;
+        }
+
+        output += `\n**Task ID:** ${result.task_id}\n\n`;
+        output += `Video generation is in progress. Use the task_id to check status or wait for callback if callback_url was provided.`;
+
+        return {
+          content: [{ type: "text", text: output }],
+          details: {
+            prompt: params.prompt,
+            model: "S2V-01",
+            taskId: result.task_id,
+          },
+        };
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : "Unknown error";
+        return {
+          content: [{ type: "text", text: `❌ **Video Generation Error:**\n\n${errorMessage}` }],
+          details: { error: errorMessage, subjectImage: params.subject_image },
+          isError: true,
+        };
+      }
+    },
+  });
+
+  // Register query_video tool
+  pi.registerTool({
+    name: "query_video",
+    label: "Query Video Status",
+    description: `Query the status of a video generation task.
+
+    Use the task_id returned from generate_video to check if the video is ready.
+    Returns the video file_id and dimensions when successful.`,
+    parameters: Type.Object({
+      task_id: Type.String({
+        description: "The task ID to query",
+        examples: ["176843862716480", "123456789012345"],
+      }),
+    }),
+
+    async execute(_toolCallId, params, _signal, onUpdate, _ctx) {
+      const config = validateConfig();
+      const url = `${config.apiHost}/v1/query/video_generation?task_id=${encodeURIComponent(params.task_id)}`;
+
+      onUpdate?.({
+        content: [{ type: "text", text: `Querying video status...` }],
+        details: { status: "querying", taskId: params.task_id },
+      });
+
+      try {
+        const response = await fetch(url, {
+          method: "GET",
+          headers: {
+            "Authorization": `Bearer ${config.apiKey}`,
+            "Content-Type": "application/json",
+            "MM-API-Source": "Minimax-MCP",
+          },
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`MiniMax API error (${response.status}): ${errorText}`);
+        }
+
+        const result: VideoQueryResponse = await response.json();
+
+        // Check for API error
+        if (result.base_resp.status_code !== 0) {
+          throw new Error(`MiniMax API error (${result.base_resp.status_code}): ${result.base_resp.status_msg}`);
+        }
+
+        // Format output based on status
+        let output = `## Video Generation Status\n\n`;
+        output += `**Task ID:** ${result.task_id}\n`;
+        output += `**Status:** ${result.status}\n\n`;
+
+        if (result.status === "Success") {
+          output += `### Video Ready\n\n`;
+          output += `**File ID:** ${result.file_id}\n`;
+          if (result.video_width && result.video_height) {
+            output += `**Resolution:** ${result.video_width}x${result.video_height}\n`;
+          }
+          output += `\nYour video has been generated successfully. Use the file_id to access the video (note: file_id is not the direct URL).`;
+        } else if (result.status === "Fail") {
+          output += `Video generation failed. Please try again with a different prompt.`;
+        } else {
+          output += `Video is still ${result.status.toLowerCase()}. Please query again in a few moments.`;
+        }
+
+        return {
+          content: [{ type: "text", text: output }],
+          details: {
+            taskId: result.task_id,
+            status: result.status,
+            fileId: result.file_id,
+            videoWidth: result.video_width,
+            videoHeight: result.video_height,
+          },
+        };
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : "Unknown error";
+        return {
+          content: [{ type: "text", text: `❌ **Video Query Error:**\n\n${errorMessage}` }],
+          details: { error: errorMessage, taskId: params.task_id },
+          isError: true,
+        };
+      }
+    },
+  });
+
+  // Register download_video tool
+  pi.registerTool({
+    name: "download_video",
+    label: "Download Video",
+    description: `Get the download URL for a generated video.
+
+    Use the file_id returned from query_video to get the download URL.
+    Note: The download URL expires after 1 hour.`,
+    parameters: Type.Object({
+      file_id: Type.String({
+        description: "The file ID returned from query_video",
+        examples: ["176844028768320", "123456789012345"],
+      }),
+    }),
+
+    async execute(_toolCallId, params, _signal, onUpdate, _ctx) {
+      const config = validateConfig();
+      const url = `${config.apiHost}/v1/files/retrieve?file_id=${encodeURIComponent(params.file_id)}`;
+
+      onUpdate?.({
+        content: [{ type: "text", text: `Fetching video download URL...` }],
+        details: { status: "downloading", fileId: params.file_id },
+      });
+
+      try {
+        const response = await fetch(url, {
+          method: "GET",
+          headers: {
+            "Authorization": `Bearer ${config.apiKey}`,
+            "Content-Type": "application/json",
+            "MM-API-Source": "Minimax-MCP",
+          },
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`MiniMax API error (${response.status}): ${errorText}`);
+        }
+
+        const result: VideoDownloadResponse = await response.json();
+
+        // Check for API error
+        if (result.base_resp.status_code !== 0) {
+          throw new Error(`MiniMax API error (${result.base_resp.status_code}): ${result.base_resp.status_msg}`);
+        }
+
+        // Format output
+        let output = `## Video Download\n\n`;
+
+        if (result.file) {
+          output += `**Filename:** ${result.file.filename || "video.mp4"}\n`;
+          output += `**File ID:** ${result.file.file_id}\n`;
+
+          if (result.file.bytes) {
+            const sizeMB = (result.file.bytes / (1024 * 1024)).toFixed(2);
+            output += `**Size:** ${sizeMB} MB\n`;
+          }
+
+          output += `\n`;
+
+          if (result.file.download_url) {
+            const downloadUrl = normalizeUrl(result.file.download_url);
+            output += `### Download URL\n\n`;
+            output += `**URL:** ${downloadUrl}\n\n`;
+            output += `**Download:** ${downloadUrl}\n\n`;
+            output += `⚠️ **Note:** This download URL expires in 1 hour. Download the video promptly.`;
+          }
+        }
+
+        return {
+          content: [{ type: "text", text: output }],
+          details: {
+            fileId: result.file?.file_id,
+            filename: result.file?.filename,
+            bytes: result.file?.bytes,
+            downloadUrl: result.file?.download_url ? normalizeUrl(result.file.download_url) : undefined,
+          },
+        };
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : "Unknown error";
+        return {
+          content: [{ type: "text", text: `❌ **Video Download Error:**\n\n${errorMessage}` }],
+          details: { error: errorMessage, fileId: params.file_id },
           isError: true,
         };
       }

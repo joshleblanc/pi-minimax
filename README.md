@@ -1,6 +1,6 @@
 # MiniMax Extension for pi
 
-AI-powered extension providing web search, image understanding, image generation, music generation, and lyrics generation tools.
+AI-powered extension providing web search, image understanding, image generation, music generation, lyrics generation, and video generation tools.
 
 ## Tools
 
@@ -60,6 +60,67 @@ Generate song lyrics using MiniMax AI. Creates original lyrics with structural t
 - `prompt` (optional): Theme, style, or instructions (max 2000 chars)
 - `lyrics` (optional): Existing lyrics to edit/continue (only for edit mode, max 3500 chars)
 - `title` (optional): Desired song title
+
+### `generate_video`
+Generate videos from text prompts using MiniMax AI. Video generation is asynchronous and returns a task_id for tracking.
+
+**Parameters:**
+- `prompt` (required): Text description of the video (max 2000 chars). Supports camera commands like [Pedestal up], [Static shot], [Pan left]
+- `model` (optional): Model to use - "MiniMax-Hailuo-2.3" (default), "MiniMax-Hailuo-02", "T2V-01-Director", or "T2V-01"
+- `prompt_optimizer` (optional): Auto-optimize prompt, default true
+- `fast_pretreatment` (optional): Reduces optimization time for specific models
+- `duration` (optional): Video duration in seconds, default 6
+- `resolution` (optional): Video resolution - "720P", "768P", or "1080P"
+- `callback_url` (optional): Webhook URL for async status updates
+
+### `generate_video_from_image`
+Generate a video from an image using MiniMax AI (image-to-video). Takes a source image and generates a video based on the text prompt and camera commands.
+
+**Parameters:**
+- `image` (required): Source image - URL, local path, or base64 data URL (JPG, PNG, WebP; short edge >300px)
+- `prompt` (optional): Video description (max 2000 chars). Supports camera commands like [Pan left], [Zoom in]
+- `model` (optional): Model to use - "MiniMax-Hailuo-2.3" (default), "MiniMax-Hailuo-2.3-Fast", "MiniMax-Hailuo-02", "I2V-01-Director", "I2V-01-live", or "I2V-01"
+- `prompt_optimizer` (optional): Auto-optimize prompt, default true
+- `fast_pretreatment` (optional): Reduces optimization time (2.3/2.3-Fast/02 models only)
+- `duration` (optional): Video duration in seconds, default 6
+- `resolution` (optional): Video resolution - "512P", "720P", "768P", or "1080P"
+- `callback_url` (optional): Webhook URL for async status updates
+
+### `generate_video_with_frames`
+Generate a video from first and last frame images using MiniMax AI (first-last frame video). Creates a video transition from start to end frame.
+
+**Parameters:**
+- `last_frame_image` (required): Ending frame - URL, local path, or base64 data URL (JPG, PNG, WebP; short edge >300px)
+- `first_frame_image` (optional): Starting frame - URL, local path, or base64 data URL
+- `prompt` (optional): Video description (max 2000 chars). Supports camera commands like [Pan left], [Zoom in]
+- `model` (optional): Model to use - "MiniMax-Hailuo-02" (default)
+- `prompt_optimizer` (optional): Auto-optimize prompt, default true
+- `duration` (optional): Video duration in seconds (6 or 10), default 6
+- `resolution` (optional): Video resolution - "768P" or "1080P" (10s only supports 768P)
+- `callback_url` (optional): Webhook URL for async status updates
+
+### `generate_video_with_subject`
+Generate a video with a subject reference using MiniMax AI (S2V). Uses a character image reference to generate videos featuring that subject.
+
+**Parameters:**
+- `subject_image` (required): Subject reference image - URL, local path, or base64 data URL (JPG, PNG, WebP; short edge >300px)
+- `prompt` (optional): Video description (max 2000 chars)
+- `prompt_optimizer` (optional): Auto-optimize prompt, default true
+- `callback_url` (optional): Webhook URL for async status updates
+
+### `query_video`
+Query the status of a video generation task. Use the task_id returned from generate_video to check if the video is ready.
+
+**Parameters:**
+- `task_id` (required): The task ID to query
+
+### `download_video`
+Get the download URL for a generated video. Use the file_id returned from query_video to get the download URL.
+
+**Parameters:**
+- `file_id` (required): The file ID returned from query_video
+
+**Note:** The download URL expires after 1 hour.
 
 ## Setup
 
@@ -139,6 +200,55 @@ Generate lyrics with:
   Mode: write_full_song
   Prompt: "A cheerful love song about a summer day at the beach"
   Title: "Summer Breeze Promise"
+```
+
+### Video Generation Example
+```
+Generate video with:
+  Prompt: "A man picks up a book [Pedestal up], then reads [Static shot]"
+  Model: MiniMax-Hailuo-2.3
+  Duration: 6
+  Resolution: 1080P
+```
+
+### Image-to-Video Generation Example
+```
+Generate video from image with:
+  Image: "./photo.jpg"
+  Prompt: "A mouse runs toward the camera, smiling and blinking [Pan left]"
+  Model: MiniMax-Hailuo-2.3
+  Duration: 6
+  Resolution: 1080P
+```
+
+### First/Last Frame Video Generation Example
+```
+Generate video with frames:
+  First frame: "./start.jpg"
+  Last frame: "./end.jpg"
+  Prompt: "A little girl grow up [Pan right]"
+  Model: MiniMax-Hailuo-02
+  Duration: 6
+  Resolution: 1080P
+```
+
+### Subject Reference Video Generation Example
+```
+Generate video with subject:
+  Subject image: "./portrait.jpg"
+  Prompt: "A girl runs toward the camera and winks with a smile"
+```
+
+### Query Video Status Example
+```
+Query video status with:
+  Task ID: "176843862716480"
+```
+
+### Download Video Example
+```
+Download video with:
+  File ID: "176844028768320"
 ```
 
 ## Requirements
