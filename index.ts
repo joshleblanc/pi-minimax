@@ -7,6 +7,7 @@
  * - generate_image: Generate images from text prompts using AI
  * - transform_image: Transform existing images using AI (image-to-image)
  * - generate_music: Generate music using AI
+ * - generate_lyrics: Generate song lyrics using AI
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
@@ -86,6 +87,16 @@ interface MusicGenerationResponse {
     sample_rate?: number;
     bitrate?: number;
     size?: number;
+  };
+}
+
+interface LyricsGenerationResponse {
+  song_title?: string;
+  style_tags?: string;
+  lyrics?: string;
+  base_resp: {
+    status_code: number;
+    status_msg: string;
   };
 }
 
@@ -947,6 +958,143 @@ Your music is being generated. Please try again in a moment to retrieve the comp
         return {
           content: [{ type: "text", text: `❌ **Music Generation Error:**\n\n${errorMessage}` }],
           details: { error: errorMessage, prompt: params.prompt },
+          isError: true,
+        };
+      }
+    },
+  });
+
+  // Register generate_lyrics tool
+  pi.registerTool({
+    name: "generate_lyrics",
+    label: "Generate Lyrics",
+    description: `Generate song lyrics using MiniMax AI.
+
+    Creates original lyrics with structural tags like [Verse], [Chorus], [Bridge].
+    The generated lyrics can be used directly with the generate_music tool.
+
+    Supports two modes:
+    - write_full_song: Generate a complete new song
+    - edit: Edit or continue existing lyrics`,
+    parameters: Type.Object({
+      mode: Type.String({
+        description: "Generation mode",
+        enum: ["write_full_song", "edit"],
+        default: "write_full_song",
+      }),
+      prompt: Type.Optional(
+        Type.String({
+          description: "Theme, style, or instructions for generation (max 2000 characters)",
+          examples: [
+            "A cheerful love song about a summer day at the beach",
+            "Melancholic indie folk about long-distance relationships",
+            "Uplifting pop anthem about overcoming challenges",
+          ],
+        })
+      ),
+      lyrics: Type.Optional(
+        Type.String({
+          description: "Existing lyrics to edit or continue (only for edit mode, max 3500 characters)",
+        })
+      ),
+      title: Type.Optional(
+        Type.String({
+          description: "Desired song title (will be preserved in output)",
+          examples: [
+            "Summer Breeze Promise",
+            "Midnight Dreams",
+            "Walking on Sunshine",
+          ],
+        })
+      ),
+    }),
+
+    async execute(_toolCallId, params, _signal, onUpdate, _ctx) {
+      const config = validateConfig();
+      const url = `${config.apiHost}/v1/lyrics_generation`;
+
+      onUpdate?.({
+        content: [{ type: "text", text: `Generating lyrics...` }],
+        details: { status: "generating", mode: params.mode },
+      });
+
+      try {
+        const requestBody: Record<string, unknown> = {
+          mode: params.mode,
+        };
+
+        // Add prompt if provided
+        if (params.prompt) {
+          requestBody.prompt = params.prompt;
+        }
+
+        // Add lyrics if provided (for edit mode)
+        if (params.lyrics) {
+          requestBody.lyrics = params.lyrics;
+        }
+
+        // Add title if provided
+        if (params.title) {
+          requestBody.title = params.title;
+        }
+
+        const response = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${config.apiKey}`,
+            "Content-Type": "application/json",
+            "MM-API-Source": "Minimax-MCP",
+          },
+          body: JSON.stringify(requestBody),
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`MiniMax API error (${response.status}): ${errorText}`);
+        }
+
+        const result: LyricsGenerationResponse = await response.json();
+
+        // Check for API error
+        if (result.base_resp.status_code !== 0) {
+          throw new Error(`MiniMax API error (${result.base_resp.status_code}): ${result.base_resp.status_msg}`);
+        }
+
+        // Format output
+        let output = `## Generated Lyrics\n\n`;
+
+        if (result.song_title) {
+          output += `**Title:** ${result.song_title}\n\n`;
+        }
+
+        if (result.style_tags) {
+          output += `**Style:** ${result.style_tags}\n\n`;
+        }
+
+        if (result.lyrics) {
+          output += `### Lyrics\n\n${result.lyrics}\n`;
+        }
+
+        output += `\n---\n**Mode:** ${params.mode}`;
+        if (params.prompt) {
+          output += ` | **Prompt:** ${params.prompt}`;
+        }
+
+        return {
+          content: [{ type: "text", text: output }],
+          details: {
+            songTitle: result.song_title,
+            styleTags: result.style_tags,
+            lyrics: result.lyrics,
+            mode: params.mode,
+            prompt: params.prompt,
+          },
+        };
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : "Unknown error";
+        return {
+          content: [{ type: "text", text: `❌ **Lyrics Generation Error:**\n\n${errorMessage}` }],
+          details: { error: errorMessage, mode: params.mode },
           isError: true,
         };
       }

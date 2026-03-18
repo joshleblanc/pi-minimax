@@ -1,6 +1,6 @@
 # MiniMax Extension for pi
 
-AI-powered extension providing web search, image understanding, image generation, and music generation tools.
+AI-powered extension providing web search, image understanding, image generation, music generation, and lyrics generation tools.
 
 ## Tools
 
@@ -51,6 +51,15 @@ Generate music using MiniMax AI. Creates original music tracks based on text des
 - `bitrate` (optional): Audio bitrate - 32000, 64000, 128000, or 256000 bps
 - `audio_format` (optional): Audio format - "mp3" (default), "wav", or "pcm"
 - `lyrics_optimizer` (optional): Automatically generate lyrics from the prompt, default false
+
+### `generate_lyrics`
+Generate song lyrics using MiniMax AI. Creates original lyrics with structural tags like [Verse], [Chorus], [Bridge]. The generated lyrics can be used with the generate_music tool.
+
+**Parameters:**
+- `mode` (optional): Generation mode - "write_full_song" (default) or "edit"
+- `prompt` (optional): Theme, style, or instructions (max 2000 chars)
+- `lyrics` (optional): Existing lyrics to edit/continue (only for edit mode, max 3500 chars)
+- `title` (optional): Desired song title
 
 ## Setup
 
@@ -122,6 +131,14 @@ Generate music with:
   Lyrics: "[Verse 1]\nStreetlights flicker in the rain\n[Verse 2]\nMemories fade like yesterday"
   Prompt: "Acoustic folk ballad"
   Model: music-2.5+
+```
+
+### Lyrics Generation Example
+```
+Generate lyrics with:
+  Mode: write_full_song
+  Prompt: "A cheerful love song about a summer day at the beach"
+  Title: "Summer Breeze Promise"
 ```
 
 ## Requirements
