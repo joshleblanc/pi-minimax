@@ -5,6 +5,7 @@
  * - web_search: Search the web and get structured results
  * - understand_image: Analyze images using AI
  * - generate_image: Generate images from text prompts using AI
+ * - transform_image: Transform existing images using AI (image-to-image)
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
@@ -89,12 +90,12 @@ async function processImageUrl(imageUrl: string): Promise<string> {
   if (imageUrl.startsWith("@")) {
     imageUrl = imageUrl.substring(1);
   }
-  
+
   // If already in base64 data URL format, pass through
   if (imageUrl.startsWith("data:")) {
     return imageUrl;
   }
-  
+
   // Handle HTTP/HTTPS URLs
   if (imageUrl.startsWith("http://") || imageUrl.startsWith("https://")) {
     try {
@@ -103,7 +104,7 @@ async function processImageUrl(imageUrl: string): Promise<string> {
         throw new Error(`Failed to download image: ${imageResponse.status} ${imageResponse.statusText}`);
       }
       const imageData = await imageResponse.arrayBuffer();
-      
+
       // Detect image format from content-type header
       const contentType = imageResponse.headers.get('content-type')?.toLowerCase() || '';
       let imageFormat = 'jpeg'; // Default
@@ -114,28 +115,28 @@ async function processImageUrl(imageUrl: string): Promise<string> {
       } else if (contentType.includes('jpeg') || contentType.includes('jpg')) {
         imageFormat = 'jpeg';
       }
-      
+
       // Convert to base64 data URL
       const base64Data = Buffer.from(imageData).toString('base64');
       return `data:image/${imageFormat};base64,${base64Data}`;
-      
+
     } catch (error) {
       throw new Error(`Failed to download image from URL: ${error}`);
     }
   }
-  
+
   // Handle local file paths (including Windows paths)
   else {
     try {
       const fs = await import('fs/promises');
       const path = await import('path');
-      
+
       // Resolve the file path
       const resolvedPath = path.resolve(imageUrl);
       const fileHandle = await fs.open(resolvedPath, 'r');
       const fileBuffer = await fileHandle.readFile();
       await fileHandle.close();
-      
+
       // Detect image format from file extension
       let imageFormat = 'jpeg'; // Default
       const lowerPath = resolvedPath.toLowerCase();
@@ -146,10 +147,10 @@ async function processImageUrl(imageUrl: string): Promise<string> {
       } else if (lowerPath.endsWith('.jpg') || lowerPath.endsWith('.jpeg')) {
         imageFormat = 'jpeg';
       }
-      
+
       const base64Data = fileBuffer.toString('base64');
       return `data:image/${imageFormat};base64,${base64Data}`;
-      
+
     } catch (error) {
       throw new Error(`Failed to read local image file: ${error}`);
     }
@@ -409,7 +410,7 @@ export default function (pi: ExtensionAPI) {
       prompt_optimizer: Type.Optional(
         Type.Boolean({
           description: "Whether to automatically optimize the prompt for better results",
-          default: false,
+          default: true,
         })
       ),
     }),
@@ -506,6 +507,203 @@ export default function (pi: ExtensionAPI) {
         const errorMessage = error instanceof Error ? error.message : "Unknown error";
         return {
           content: [{ type: "text", text: `❌ **Image Generation Error:**\n\n${errorMessage}` }],
+          details: { error: errorMessage, prompt: params.prompt },
+          isError: true,
+        };
+      }
+    },
+  });
+
+  // Register transform_image tool (image-to-image generation)
+  pi.registerTool({
+    name: "transform_image",
+    label: "Transform Image",
+    description: `Transform an existing image using AI (image-to-image generation).
+
+    Takes a source image and generates a new image based on the text prompt.
+    Supports local file paths (will be encoded to base64), public URLs, and data URLs.
+
+    Note: Generated image URLs expire after 24 hours.`,
+    parameters: Type.Object({
+      prompt: Type.String({
+        description: "Text description of the desired transformation (max 1500 characters)",
+        examples: [
+          "A girl looking into the distance from a library window",
+          "Transform this into a cyberpunk style portrait",
+          "Put this character in a medieval fantasy setting",
+        ],
+      }),
+      image: Type.String({
+        description: "Source image: URL, local path, or base64 data URL",
+        examples: [
+          "https://example.com/photo.jpg",
+          "./portrait.png",
+          "/home/user/image.png",
+        ],
+      }),
+      model: Type.Optional(
+        Type.String({
+          description: "Model to use for image transformation",
+          default: "image-01",
+        })
+      ),
+      subject_type: Type.Optional(
+        Type.String({
+          description: "Type of subject reference",
+          enum: ["character"],
+          default: "character",
+        })
+      ),
+      aspect_ratio: Type.Optional(
+        Type.String({
+          description: "Image aspect ratio",
+          enum: ["1:1", "16:9", "4:3", "3:2", "2:3", "3:4", "9:16", "21:9"],
+          default: "1:1",
+        })
+      ),
+      width: Type.Optional(
+        Type.Number({
+          description: "Image width in pixels (512-2048, divisible by 8). If provided alongside aspect_ratio, aspect_ratio takes priority.",
+          minimum: 512,
+          maximum: 2048,
+        })
+      ),
+      height: Type.Optional(
+        Type.Number({
+          description: "Image height in pixels (512-2048, divisible by 8). If provided alongside aspect_ratio, aspect_ratio takes priority.",
+          minimum: 512,
+          maximum: 2048,
+        })
+      ),
+      response_format: Type.Optional(
+        Type.String({
+          description: "Format for the generated image",
+          enum: ["url", "base64"],
+          default: "url",
+        })
+      ),
+      seed: Type.Optional(
+        Type.Number({
+          description: "Random seed for reproducible generation",
+        })
+      ),
+      n: Type.Optional(
+        Type.Number({
+          description: "Number of images to generate (1-9)",
+          minimum: 1,
+          maximum: 9,
+          default: 1,
+        })
+      ),
+      prompt_optimizer: Type.Optional(
+        Type.Boolean({
+          description: "Whether to automatically optimize the prompt for better results",
+          default: false,
+        })
+      ),
+    }),
+
+    async execute(_toolCallId, params, _signal, onUpdate, _ctx) {
+      const config = validateConfig();
+      const url = `${config.apiHost}/v1/image_generation`;
+
+      onUpdate?.({
+        content: [{ type: "text", text: `Transforming image...` }],
+        details: { status: "transforming", prompt: params.prompt },
+      });
+
+      try {
+        // Process image: convert local paths to base64, pass through URLs and data URLs
+        const processedImage = await processImageUrl(params.image);
+
+        const requestBody: Record<string, unknown> = {
+          prompt: params.prompt,
+          model: params.model || "image-01",
+          response_format: params.response_format || "url",
+          n: params.n || 1,
+          prompt_optimizer: params.prompt_optimizer || false,
+          subject_reference: [
+            {
+              type: params.subject_type || "character",
+              image_file: processedImage,
+            },
+          ],
+        };
+
+        // Add aspect_ratio or width/height
+        if (params.aspect_ratio) {
+          requestBody.aspect_ratio = params.aspect_ratio;
+        } else if (params.width && params.height) {
+          requestBody.width = params.width;
+          requestBody.height = params.height;
+        }
+
+        // Add seed if provided
+        if (params.seed !== undefined) {
+          requestBody.seed = params.seed;
+        }
+
+        const response = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${config.apiKey}`,
+            "Content-Type": "application/json",
+            "MM-API-Source": "Minimax-MCP",
+          },
+          body: JSON.stringify(requestBody),
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`MiniMax API error (${response.status}): ${errorText}`);
+        }
+
+        const result: ImageGenerationResponse = await response.json();
+
+        // Check for API error
+        if (result.base_resp.status_code !== 0) {
+          throw new Error(`MiniMax API error (${result.base_resp.status_code}): ${result.base_resp.status_msg}`);
+        }
+
+        // Normalize URLs to use https
+        const normalizedUrls = (result.data.image_urls || []).map(normalizeUrl);
+
+        // Format output based on response format
+        let output = `## Transformed Image${(result.metadata.success_count || 1) > 1 ? "s" : ""}\n\n`;
+        output += `**Prompt:** ${params.prompt}\n\n`;
+
+        if (params.response_format === "base64" && result.data.image_base64) {
+          output += `**Format:** Base64\n\n`;
+          for (let i = 0; i < result.data.image_base64.length; i++) {
+            output += `### Image ${i + 1}\n`;
+            output += `Base64 data (truncated): ${result.data.image_base64[i].substring(0, 50)}...\n\n`;
+          }
+        } else if (normalizedUrls.length > 0) {
+          output += `**Format:** URL (expires in 24 hours)\n\n`;
+          for (let i = 0; i < normalizedUrls.length; i++) {
+            output += `### Image ${i + 1}\n`;
+            output += `**Image URL:** ${normalizedUrls[i]}\n\n`;
+            output += `**View:** ${normalizedUrls[i]}\n\n`;
+          }
+        }
+
+        output += `**Success:** ${result.metadata.success_count} | **Failed:** ${result.metadata.failed_count}`;
+
+        return {
+          content: [{ type: "text", text: output }],
+          details: {
+            prompt: params.prompt,
+            model: params.model || "image-01",
+            successCount: result.metadata.success_count,
+            failedCount: result.metadata.failed_count,
+            imageUrls: normalizedUrls,
+            imageBase64: result.data.image_base64 ? result.data.image_base64.map((_, i) => `Image ${i + 1} base64 data`) : [],
+          },
+        };
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : "Unknown error";
+        return {
+          content: [{ type: "text", text: `❌ **Image Transformation Error:**\n\n${errorMessage}` }],
           details: { error: errorMessage, prompt: params.prompt },
           isError: true,
         };
