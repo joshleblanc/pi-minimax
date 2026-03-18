@@ -1,6 +1,6 @@
 # MiniMax Extension for pi
 
-AI-powered extension providing web search and image understanding tools.
+AI-powered extension providing web search, image understanding, and image generation tools.
 
 ## Tools
 
@@ -9,6 +9,19 @@ Search the web and get structured results with titles, URLs, snippets, and relat
 
 ### `understand_image`
 Analyze images using AI - supports URLs and local file paths.
+
+### `generate_image`
+Generate images from text prompts using MiniMax AI.
+
+**Parameters:**
+- `prompt` (required): Text description of the image to generate (max 1500 characters)
+- `model` (optional): Model to use, default "image-01"
+- `aspect_ratio` (optional): Image aspect ratio - "1:1", "16:9", "4:3", "3:2", "2:3", "3:4", "9:16", "21:9"
+- `width`/`height` (optional): Specific dimensions in pixels (512-2048, divisible by 8)
+- `response_format` (optional): "url" (default, expires 24h) or "base64"
+- `seed` (optional): Random seed for reproducible generation
+- `n` (optional): Number of images to generate (1-9, default 1)
+- `prompt_optimizer` (optional): Enable automatic prompt optimization
 
 ## Setup
 
@@ -50,6 +63,13 @@ Search for: "latest TypeScript features 2024"
 ```
 Analyze: "./screenshot.png"
 Prompt: "What does this diagram show?"
+```
+
+### Image Generation Example
+```
+Generate an image with prompt: "A serene beach at sunset with palm trees"
+Aspect ratio: 16:9
+Number of images: 2
 ```
 
 ## Requirements
